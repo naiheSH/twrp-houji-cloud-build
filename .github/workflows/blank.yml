@@ -1,4 +1,5 @@
 name: TWRP 16 Builder
+
 on:
   workflow_dispatch:
     inputs:
@@ -34,7 +35,6 @@ on:
         description: "Build partition"
         required: true
         default: "recovery"
-      # 新增通用依赖配置（适配SM8650平台）
       COMMON_DEVICE_TREE_URL:
         description: "Common device tree url (SM8650)"
         required: true
@@ -58,46 +58,30 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Show build info
+      # 更新并安装依赖
+      - name: Update apt sources
         run: |
-          if [ -n "${{ github.event.inputs.LUNCH_TARGET }}" ]; then
-            echo "LUNCH_TARGET=${{ github.event.inputs.LUNCH_TARGET }}" >> "$GITHUB_ENV"
-          else
-            echo "LUNCH_TARGET=${{ github.event.inputs.DEVICE_NAME }}" >> "$GITHUB_ENV"
-          fi
-          {
-            echo 'BUILD_INFO<<EOF'
-            echo
-            echo "Manifest url: ${{ github.event.inputs.TWRP_MANIFEST_URL }}"
-            echo "Manifest branch: ${{ github.event.inputs.TWRP_MANIFEST_BRANCH }}"
-            echo "Device tree url: ${{ github.event.inputs.DEVICE_TREE_URL }}"
-            echo "Device tree branch: ${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
-            echo "Common device tree: ${{ github.event.inputs.COMMON_DEVICE_TREE_URL }}"
-            echo "Device path: device/${{ github.event.inputs.DEVICE_PATH }}"
-            echo "Device name: ${{ github.event.inputs.DEVICE_NAME }}"
-            echo "Lunch target: twrp_${{ env.LUNCH_TARGET }}"
-            echo "Build target: ${{ github.event.inputs.BUILD_PARTITION }}.img"
-            echo "Build date: $(date)"
-            echo
-            echo EOF
-          } >> "$GITHUB_ENV"
-          echo "BUILD_DATE=$(date +%F)" >> "$GITHUB_ENV"
-          echo "REPO_NAME=$(basename ${{ github.event.inputs.TWRP_MANIFEST_URL }})" >> "$GITHUB_ENV"
+          # 强制使用官方 Ubuntu 镜像源
+          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://archive.ubuntu.com/ubuntu|' /etc/apt/sources.list
+          sudo apt update
 
-      - name: Cleanup & Maximize space
-        uses: easimon/maximize-build-space@master
-        with:
-          remove-dotnet: true
-          remove-android: true
-          remove-haskell: true
-          remove-codeql: true
+      - name: Install dependencies
+        run: |
+          # 安装构建所需的依赖和工具
+          sudo apt install -y linux-modules-extra-$(uname -r) zram-tools
+          sudo apt install -y repo bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev libelf-dev liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3-pip python3-dev libffi-dev libssl-dev zlib1g-dev openjdk-17-jdk python3-protobuf
+          pip3 install pycairo
+          git config --global user.name "${{ github.actor }}"
+          git config --global user.email "${{ github.actor }}@users.noreply.github.com"
 
+      # 设置 ccache
       - name: Setup ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           create-symlink: true
-          max-size: "60G"  # 适配Android 16大源码
+          max-size: "60G"
 
+      # 设置 zram
       - name: Setup zram
         run: |
           sudo apt install linux-modules-extra-$(uname -r) zram-tools -y
@@ -107,42 +91,28 @@ jobs:
           sudo systemctl restart zramswap
           zramctl
 
-      - name: Setup build environment (Android 16)
-        run: |
-          export DEBIAN_FRONTEND=noninteractive
-          sudo apt update && sudo apt upgrade -y
-          # 完整依赖（含Android 16必需组件）
-          sudo apt install -y repo bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev libelf-dev liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3-pip python3-dev libffi-dev libssl-dev zlib1g-dev openjdk-17-jdk python3-protobuf
-          pip3 install pycairo
-          # 配置git
-          git config --global user.name "${{ github.actor }}"
-          git config --global user.email "${{ github.actor }}@users.noreply.github.com"
-
+      # 同步 TWRP 源代码
       - name: Sync TWRP-16.0 source (with retry)
         run: |
           repo init -u ${{ github.event.inputs.TWRP_MANIFEST_URL }} -b ${{ github.event.inputs.TWRP_MANIFEST_BRANCH }} --depth=1 || repo init -u ${{ github.event.inputs.TWRP_MANIFEST_URL }} -b ${{ github.event.inputs.TWRP_MANIFEST_BRANCH }} --depth=1
-          # 后台输出同步状态，避免超时
           (while true; do echo "$(date +%T) Syncing source..."; sleep 60; done) &
           TIP_PID=$!
           repo sync -j$(nproc) --no-clone-bundle --no-tags --force-sync || repo sync -j$(nproc) --no-clone-bundle --no-tags --force-sync
           kill $TIP_PID && exit 0
 
+      # 导入设备树及依赖项
       - name: Import device tree & dependencies (小米14适配)
         run: |
-          # 创建目录
           mkdir -p device/xiaomi vendor/xiaomi
-          # 1. 小米14专属设备树
           git clone ${{ github.event.inputs.DEVICE_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} device/${{ github.event.inputs.DEVICE_PATH }}
-          # 2. SM8650通用设备树（核心依赖）
           git clone -b ${{ github.event.inputs.COMMON_DEVICE_BRANCH }} ${{ github.event.inputs.COMMON_DEVICE_TREE_URL }} device/xiaomi/sm8650-common
-          # 3. 通用Vendor + 设备专属Vendor
           git clone -b ${{ github.event.inputs.COMMON_DEVICE_BRANCH }} ${{ github.event.inputs.COMMON_VENDOR_URL }} vendor/xiaomi/sm8650-common
           git clone -b ${{ github.event.inputs.COMMON_DEVICE_BRANCH }} ${{ github.event.inputs.DEVICE_VENDOR_URL }} vendor/xiaomi/houji
 
+      # 注入 TWRP 配置
       - name: Inject TWRP-16.0 config (小米14专属)
         working-directory: device/${{ github.event.inputs.DEVICE_PATH }}
         run: |
-          # 1. 创建twrp.fstab（Android 16分区）
           cat > twrp.fstab << EOF
           /boot           /dev/block/bootdevice/by-name/boot           ext4    defaults
           /recovery       /dev/block/bootdevice/by-name/recovery       ext4    defaults
@@ -156,30 +126,24 @@ jobs:
           /misc           /dev/block/bootdevice/by-name/misc           ext4    defaults
           /vendor_dlkm    /dev/block/bootdevice/by-name/vendor_dlkm    ext4    ro,barrier=1
           EOF
-          # 2. 补充BoardConfig.mk变量
           cat >> BoardConfig.mk << EOF
-          # TWRP-16.0核心配置
           TW_DEVICE_VERSION := 3.7.1_16-01
           TW_SCREEN_RESOLUTION := 2720x1260
           TW_INPUT_BLACKLIST := "hbtp_vm"
           TW_INCLUDE_USB_OTG := true
           TW_EXCLUDE_DEFAULT_USB_INIT := true
-          TW_SUPPORT_INPUT_1_1 := true
           AVB_DISABLE := true
           TARGET_RECOVERY_FSTAB := \$(DEVICE_PATH)/twrp.fstab
           TW_EXCLUDE_AAPT := true
           TARGET_KERNEL_HEADERS := device/xiaomi/sm8650-common/kernel-headers
-          # Android 16适配
           TARGET_PLATFORM_VERSION := 16
           TARGET_USES_ANDROID_16 := true
-          BOARD_HAS_LARGE_FILESYSTEM := true
           TARGET_RECOVERY_DEVICE := houji
           TW_IGNORE_ANDROID16_AAPT := true
           TW_DISABLE_SELINUX_CHECK := true
           TARGET_DISABLE_DM_VERITY := true
           TARGET_DISABLE_FORCED_ENCRYPTION := true
           EOF
-          # 3. 配置产物编译规则
           cat > AndroidProducts.mk << EOF
           PRODUCT_MAKEFILES := \
               \$(LOCAL_DIR)/twrp_houji.mk
@@ -198,43 +162,3 @@ jobs:
           PRODUCT_PLATFORM_VERSION := 16
           EOF
 
-      - name: Generate build info
-        working-directory: device/${{ github.event.inputs.DEVICE_PATH }}
-        run: |
-          echo -e "$BUILD_INFO" >> INFO.txt
-          echo "=== TWRP-16.0 for Xiaomi 14 (Houji) ===" >> INFO.txt
-          echo "Change log:" >> INFO.txt
-          set +e
-          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null)
-          if [ $? -eq 0 ]; then
-            git log "$LAST_TAG"..HEAD --pretty=format:"- %h-%an: %s" >> INFO.txt
-          else
-            git log --pretty=format:"- %h-%an: %s" >> INFO.txt
-          fi
-          cat INFO.txt
-
-      - name: Build TWRP (稳定编译配置)
-        run: |
-          source build/envsetup.sh
-          export ALLOW_MISSING_DEPENDENCIES=true
-          export USE_CCACHE=1
-          export CCACHE_EXEC=$(command -v ccache)
-          ccache -M 60G
-          # 降低线程避免CPU过载
-          lunch twrp_${{ env.LUNCH_TARGET }}-eng
-          (while true; do echo "$(date +%T) Building TWRP..."; free -h; sleep 30; done) &
-          TIP_PID=$!
-          mka ${{ github.event.inputs.BUILD_PARTITION }}image -j$(($(nproc)/2))
-          # 重命名产物（含版本+日期）
-          mv out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_PARTITION }}.img out/target/product/${{ github.event.inputs.DEVICE_NAME }}/TWRP-3.7.1-16-Xiaomi14-${{ env.BUILD_DATE }}.img
-          kill $TIP_PID && exit 0
-
-      - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: out/target/product/${{ github.event.inputs.DEVICE_NAME }}/TWRP-3.7.1-16-Xiaomi14-${{ env.BUILD_DATE }}.img
-          name: TWRP-3.7.1-16-Xiaomi14-${{ env.BUILD_DATE }}
-          tag_name: Xiaomi14-TWRP16.0-${{ env.BUILD_DATE }}
-          body_path: device/${{ github.event.inputs.DEVICE_PATH }}/INFO.txt
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
