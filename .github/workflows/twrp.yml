@@ -4,218 +4,145 @@ on:
   workflow_dispatch:
     inputs:
       TWRP_MANIFEST_URL:
-        description: 'TWRP manifest url'
+        description: "TWRP manifest url"
         required: true
-        default: 'https://github.com/TWRP-Test/platform_manifest_twrp_aosp'
+        default: "https://github.com/TWRP-Test/platform_manifest_twrp_aosp"
       TWRP_MANIFEST_BRANCH:
-        description: 'TWRP manifest branch'
+        description: "TWRP branch"
         required: true
-        default: 'twrp-16.0'
-
+        default: "twrp-16.0"
       DEVICE_TREE_URL:
-        description: 'Device tree repo (device_xiaomi_houji)'
+        description: "Device tree url"
         required: true
-        default: 'https://github.com/wajidsnaa/android_device_xiaomi_houji'
+        default: "https://github.com/wajidsnaa/android_device_xiaomi_houji"
       DEVICE_TREE_BRANCH:
-        description: 'Device tree branch'
+        description: "Device tree branch"
         required: true
-        default: 'twrp-13.0'
-
-      COMMON_TREE_URL:
-        description: 'Common tree repo (device_xiaomi_sm8650-common)'
-        required: true
-        default: 'https://github.com/lolipuru/device_xiaomi_sm8650-common'
-      COMMON_TREE_BRANCH:
-        description: 'Common tree branch'
-        required: true
-        default: 'twrp-13.0'
-
-      KERNEL_URL:
-        description: 'Optional kernel repo url'
-        required: false
-        default: ''
-      KERNEL_BRANCH:
-        description: 'Kernel branch'
-        required: false
-        default: 'main'
-
-      VENDOR_URL:
-        description: 'Optional vendor repo url'
-        required: false
-        default: ''
-      VENDOR_BRANCH:
-        description: 'Vendor branch'
-        required: false
-        default: 'main'
-
+        default: "matrix-16"
       DEVICE_PATH:
-        description: 'Device path under device/ (e.g. xiaomi/houji)'
+        description: "Device path device/"
         required: true
-        default: 'xiaomi/houji'
+        default: "xiaomi/houji"
       DEVICE_NAME:
-        description: 'Device name'
+        description: "Device name"
         required: true
-        default: 'houji'
-
+        default: "houji"
       LUNCH_TARGET:
-        description: 'lunch twrp_ target'
+        description: "lunch twrp_ (default same as device name)"
         required: false
-        default: ''
-
+        default: ""
       BUILD_PARTITION:
-        description: 'recovery / boot / vendor_boot'
+        description: "Build partition"
         required: true
-        default: 'recovery'
+        default: "recovery"
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    env:
-      CCACHE_MAXSIZE: 5G
-
     steps:
-      - name: Checkout workflow
-        uses: actions/checkout@v4
+    - name: Show build info
+      run: |
+        if [ -n "${{ github.event.inputs.LUNCH_TARGET }}" ]; then
+          echo "LUNCH_TARGET=${{ github.event.inputs.LUNCH_TARGET }}" >> "$GITHUB_ENV"
+        else
+          echo "LUNCH_TARGET=${{ github.event.inputs.DEVICE_NAME }}" >> "$GITHUB_ENV"
+        fi
+        {
+          echo 'BUILD_INFO<<EOF'
+          echo
+          echo Manifest url: ${{ github.event.inputs.TWRP_MANIFEST_URL }}
+          echo Manifest branch: ${{ github.event.inputs.TWRP_MANIFEST_BRANCH }}
+          echo Device tree url: ${{ github.event.inputs.DEVICE_TREE_URL }}
+          echo Device tree branch: ${{ github.event.inputs.DEVICE_TREE_BRANCH }}
+          echo Device path: ${{ github.event.inputs.DEVICE_PATH }}
+          echo Device name: ${{ github.event.inputs.DEVICE_NAME }}
+          echo Lunch target: ${{ github.event.inputs.LUNCH_TARGET }}
+          echo Build target: ${{ github.event.inputs.BUILD_PARTITION }}.img
+          echo Build date: `date`
+          echo
+          echo EOF
+        } >> "$GITHUB_ENV"
+        echo BUILD_DATE=`date +%F` >> "$GITHUB_ENV"
+        echo "REPO_NAME=$(basename ${{ github.event.inputs.TWRP_MANIFEST_URL }})" >> "$GITHUB_ENV"
 
-      - name: Show build info
-        run: |
-          if [ -n "${{ github.event.inputs.LUNCH_TARGET }}" ]; then
-            echo "LUNCH_TARGET=${{ github.event.inputs.LUNCH_TARGET }}" >> "$GITHUB_ENV"
-          else
-            echo "LUNCH_TARGET=${{ github.event.inputs.DEVICE_NAME }}" >> "$GITHUB_ENV"
-          fi
-          {
-            echo 'BUILD_INFO<<EOF'
-            echo Manifest: ${{ github.event.inputs.TWRP_MANIFEST_URL }}
-            echo Branch: ${{ github.event.inputs.TWRP_MANIFEST_BRANCH }}
-            echo Device tree: ${{ github.event.inputs.DEVICE_TREE_URL }}
-            echo Device branch: ${{ github.event.inputs.DEVICE_TREE_BRANCH }}
-            echo Common tree: ${{ github.event.inputs.COMMON_TREE_URL }}
-            echo Common branch: ${{ github.event.inputs.COMMON_TREE_BRANCH }}
-            echo Build target: ${{ github.event.inputs.BUILD_PARTITION }}
-            echo EOF
-          } >> "$GITHUB_ENV"
-          echo BUILD_DATE=$(date +%F) >> "$GITHUB_ENV"
+    - name: Cleanup
+      uses: rokibhasansagar/slimhub_actions@main
 
-      - name: Cleanup
-        uses: rokibhasansagar/slimhub_actions@main
+    - name: Maximize build space
+      uses: easimon/maximize-build-space@master
 
-      - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+    - name: Setup ccache
+      uses: hendrikmuhs/ccache-action@v1.2
+      with:
+        create-symlink: true
 
-      - name: Setup cache
-        uses: actions/cache@v4
-        with:
-          path: .ccache
-          key: ${{ runner.os }}-ccache-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-ccache-
+    - name: Setup zram
+      run: |
+        sudo apt install linux-modules-extra-$(uname -r) zram-tools -y
+        sudo modprobe zram
+        sudo sed -i 's/^#PERCENT=50/PERCENT=90/' /etc/default/zramswap
+        sudo sed -i 's/^#PRIORITY=100/PRIORITY=1000/' /etc/default/zramswap
+        sudo systemctl restart zramswap
+        zramctl
 
-      - name: Enable ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          create-symlink: true
+    - name: Setup environment
+      run: |
+        export DEBIAN_FRONTEND=noninteractive
+        sudo apt update && sudo apt upgrade -y
+        sudo apt install repo -y
+        git config --global user.name ${{ github.actor }}
+        git config --global user.email ${{ github.actor }}@users.noreply.github.com
 
-      - name: Setup zram
-        run: |
-          sudo apt update
-          sudo apt install -y linux-modules-extra-$(uname -r) zram-tools || true
-          sudo modprobe zram || true
-          sudo sed -i 's/^#PERCENT=50/PERCENT=90/' /etc/default/zramswap || true
-          sudo systemctl restart zramswap || true
+    - name: Sync source
+      run: |
+        repo init -u ${{ github.event.inputs.TWRP_MANIFEST_URL }} -b ${{ github.event.inputs.TWRP_MANIFEST_BRANCH }} --depth=1
+        (while true; do echo "Syncing source..."; sleep 60; done) &
+        TIP_PID=$!
+        repo sync
+        kill $TIP_PID && exit 0
 
-      - name: Install build dependencies
-        run: |
-          export DEBIAN_FRONTEND=noninteractive
-          sudo apt update && sudo apt upgrade -y
-          sudo apt install -y repo git-core git python3 python3-pip curl
-          git config --global user.name "${{ github.actor }}"
-          git config --global user.email "${{ github.actor }}@users.noreply.github.com"
+    - name: Setup device
+      run: |
+        git clone ${{ github.event.inputs.DEVICE_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} device/${{ github.event.inputs.DEVICE_PATH }}
 
-      - name: Repo init
-        run: |
-          repo init -u "${{ github.event.inputs.TWRP_MANIFEST_URL }}" \
-            -b "${{ github.event.inputs.TWRP_MANIFEST_BRANCH }}" --depth=1
+    - name: Generate build info
+      run: |
+        echo -e "$BUILD_INFO" >> INFO.txt
+        echo "Change log:" >> INFO.txt
+        set +e
+        LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null)
+        if [ $? -eq 0 ]; then
+          git log "$LAST_TAG"..HEAD --pretty=format:"- %h-%an: %s" >> INFO.txt
+        else
+          git log --pretty=format:"- %h-%an: %s" >> INFO.txt
+        fi
+        cat INFO.txt
+      working-directory: device/${{ github.event.inputs.DEVICE_PATH }}
 
-      - name: Repo sync
-        run: |
-          timeout 120m repo sync -c -j6 --no-tags
+    - name: Build TWRP
+      run: |
+        source build/envsetup.sh
+        export ALLOW_MISSING_DEPENDENCIES=true
+        export CCACHE_DIR=.ccache
+        export CCACHE_EXEC=$(command -v ccache)        
+        export CCACHE_MAXSIZE=5G
+        export USE_CCACHE=1
+        lunch twrp_${{ env.LUNCH_TARGET }}
+        (while true; do echo `date +%T` "Building TWRP..."; free -h; sleep 10; done) &
+        TIP_PID=$!
+        m ${{ github.event.inputs.BUILD_PARTITION }}image
+        mv out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_PARTITION }}.img out/target/product/${{ github.event.inputs.DEVICE_NAME }}/TWRP-3.7.1-16-${{ github.event.inputs.DEVICE_NAME }}-${{ env.BUILD_DATE }}.img
+        kill $TIP_PID && exit 0
 
-      - name: Clone device tree
-        run: |
-          mkdir -p device/${{ github.event.inputs.DEVICE_PATH }}
-          git clone "${{ github.event.inputs.DEVICE_TREE_URL }}" \
-            -b "${{ github.event.inputs.DEVICE_TREE_BRANCH }}" \
-            device/${{ github.event.inputs.DEVICE_PATH }} || \
-            git clone "${{ github.event.inputs.DEVICE_TREE_URL }}" \
-            device/${{ github.event.inputs.DEVICE_PATH }}
-
-      - name: Clone common tree
-        run: |
-          mkdir -p device/xiaomi/sm8650-common
-          git clone "${{ github.event.inputs.COMMON_TREE_URL }}" \
-            -b "${{ github.event.inputs.COMMON_TREE_BRANCH }}" \
-            device/xiaomi/sm8650-common || \
-            git clone "${{ github.event.inputs.COMMON_TREE_URL }}" \
-            device/xiaomi/sm8650-common
-
-      - name: Optional: clone kernel/vendor
-        run: |
-          set -e
-          if [ -n "${{ github.event.inputs.KERNEL_URL }}" ]; then
-            git clone "${{ github.event.inputs.KERNEL_URL }}" -b "${{ github.event.inputs.KERNEL_BRANCH }}" kernel || git clone "${{ github.event.inputs.KERNEL_URL }}" kernel
-          fi
-          if [ -n "${{ github.event.inputs.VENDOR_URL }}" ]; then
-            git clone "${{ github.event.inputs.VENDOR_URL }}" -b "${{ github.event.inputs.VENDOR_BRANCH }}" vendor || git clone "${{ github.event.inputs.VENDOR_URL }}" vendor
-          fi
-
-      - name: Quick fix: missing files
-        run: |
-          DEV_DIR="device/${{ github.event.inputs.DEVICE_PATH }}"
-          COMMON_DIR="device/xiaomi/sm8650-common"
-          if [ ! -f "$DEV_DIR/BoardConfig.mk" ] && [ -f "$COMMON_DIR/BoardConfig.mk" ]; then
-            cp "$COMMON_DIR/BoardConfig.mk" "$DEV_DIR/"
-          fi
-          if [ ! -f "$DEV_DIR/recovery.fstab" ] && [ -f "$COMMON_DIR/recovery.fstab" ]; then
-            cp "$COMMON_DIR/recovery.fstab" "$DEV_DIR/"
-          fi
-
-      - name: Generate INFO.txt
-        working-directory: device/${{ github.event.inputs.DEVICE_PATH }}
-        run: |
-          echo -e "$BUILD_INFO" > INFO.txt
-          echo "Change log:" >> INFO.txt
-          git log --pretty=format:"- %h %s" >> INFO.txt
-          cat INFO.txt
-
-      - name: Setup build env
-        run: |
-          source build/envsetup.sh || true
-          export ALLOW_MISSING_DEPENDENCIES=true
-          export USE_CCACHE=1
-
-      - name: Lunch and build
-        run: |
-          lunch twrp_${{ env.LUNCH_TARGET }} || exit 1
-          BUILD_PART="${{ github.event.inputs.BUILD_PARTITION }}"
-          if [ "$BUILD_PART" = "recovery" ]; then
-            m recoveryimage
-          else
-            m ${BUILD_PART}image || m ${BUILD_PART}
-          fi
-          OUT="out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${BUILD_PART}.img"
-          DST="out/target/product/${{ github.event.inputs.DEVICE_NAME }}/TWRP-3.7.1-16-${{ github.event.inputs.DEVICE_NAME }}-${{ env.BUILD_DATE }}.img"
-          mv "$OUT" "$DST"
-
-      - name: Upload release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            out/target/product/${{ github.event.inputs.DEVICE_NAME }}/TWRP-3.7.1-16-${{ github.event.inputs.DEVICE_NAME }}-${{ env.BUILD_DATE }}.img
-          name: TWRP-3.7.1-16-${{ github.event.inputs.DEVICE_NAME }}-${{ env.BUILD_DATE }}-${{ github.run_id }}
-          tag_name: ${{ env.BUILD_DATE }}-${{ github.run_id }}
-          body_path: device/${{ github.event.inputs.DEVICE_PATH }}/INFO.txt
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Upload to Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: | 
+          out/target/product/${{ github.event.inputs.DEVICE_NAME }}/TWRP-3.7.1-16-${{ github.event.inputs.DEVICE_NAME }}-${{ env.BUILD_DATE }}.img
+        name: TWRP-3.7.1-16-${{ github.event.inputs.DEVICE_NAME }}-${{ env.BUILD_DATE }}-${{ github.run_id }}
+        tag_name: ${{ env.BUILD_DATE }}-${{ github.run_id }}
+        body_path: device/${{ github.event.inputs.DEVICE_PATH }}/INFO.txt
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
