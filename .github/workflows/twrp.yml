@@ -172,17 +172,33 @@ jobs:
           git clone "${{ github.event.inputs.COMMON_TREE_URL }}" device/xiaomi/sm8650-common
         }
 
-    - name: Optional: clone kernel/vendor if provided
+        - name: Optional: clone kernel/vendor if provided
       run: |
         set -e
-        if [ -n "${{ github.event.inputs.KERNEL_URL }}" ]; then
-          echo "Cloning kernel ${GITHUB_EVENT_INPUTS_KERNEL_URL}"
-          git clone "${{ github.event.inputs.KERNEL_URL }}" -b "${{ github.event.inputs.KERNEL_BRANCH }}" kernel || {
+
+        KERNEL_URL="${{ github.event.inputs.KERNEL_URL }}"
+        KERNEL_BRANCH="${{ github.event.inputs.KERNEL_BRANCH }}"
+        VENDOR_URL="${{ github.event.inputs.VENDOR_URL }}"
+        VENDOR_BRANCH="${{ github.event.inputs.VENDOR_BRANCH }}"
+
+        if [ -n "$KERNEL_URL" ]; then
+          echo "Cloning kernel: $KERNEL_URL"
+          git clone "$KERNEL_URL" -b "$KERNEL_BRANCH" kernel || {
             echo "Kernel clone failed or branch not found — trying default branch"
-            git clone "${{ github.event.inputs.KERNEL_URL }}" kernel || echo "Kernel clone failed completely"
+            git clone "$KERNEL_URL" kernel || echo "Kernel clone failed completely"
           }
         else
           echo "No KERNEL_URL provided — skipping kernel clone"
+        fi
+
+        if [ -n "$VENDOR_URL" ]; then
+          echo "Cloning vendor: $VENDOR_URL"
+          git clone "$VENDOR_URL" -b "$VENDOR_BRANCH" vendor || {
+            echo "Vendor clone failed or branch not found — trying default branch"
+            git clone "$VENDOR_URL" vendor || echo "Vendor clone failed completely"
+          }
+        else
+          echo "No VENDOR_URL provided — skipping vendor clone"
         fi
 
         if [ -n "${{ github.event.inputs.VENDOR_URL }}" ]; then
