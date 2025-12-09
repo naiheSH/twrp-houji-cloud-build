@@ -18,7 +18,7 @@ on:
       DEVICE_TREE_BRANCH:
         description: "Device tree branch"
         required: true
-        default: "twrp-16.0"  # 需要确认设备树是否有对应分支，若无可调整
+        default: "matrix-16"  # 使用现有的Android 16分支
       DEVICE_PATH:
         description: "Device path device/"
         required: true
