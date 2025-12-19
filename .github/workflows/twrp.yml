@@ -41,6 +41,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    # 设置构建超时时间为3小时
+    timeout-minutes: 180
     steps:
     - name: Show build info
       run: |
@@ -77,6 +79,20 @@ jobs:
       uses: hendrikmuhs/ccache-action@v1.2
       with:
         create-symlink: true
+        # 增加ccache缓存大小到10G，启用压缩
+        max-size: 10G
+        compression: true
+    
+    - name: Configure ccache
+      run: |
+        # 优化ccache配置，提高缓存命中率
+        ccache --set-config=compression=true
+        ccache --set-config=compression_level=6
+        ccache --set-config=cache_dir=.ccache
+        ccache --set-config=max_size=10G
+        ccache --set-config=hash_dir=false
+        # 输出ccache状态
+        ccache -s
 
     - name: Setup zram
       run: |
@@ -100,12 +116,15 @@ jobs:
         repo init -u ${{ github.event.inputs.TWRP_MANIFEST_URL }} -b ${{ github.event.inputs.TWRP_MANIFEST_BRANCH }} --depth=1
         (while true; do echo "Syncing source..."; sleep 60; done) &
         TIP_PID=$!
-        repo sync
+        # 使用8个并行线程同步源码，添加优化选项提高速度
+        repo sync -j8 --no-tags --no-clone-bundle --current-branch
         kill $TIP_PID && exit 0
 
     - name: Setup device
       run: |
         git clone ${{ github.event.inputs.DEVICE_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} device/${{ github.event.inputs.DEVICE_PATH }}
+        # 克隆内核树，设备树依赖预编译内核
+        git clone https://github.com/wajidsnaa/android_device_xiaomi_houji-kernel -b matrix-16 device/${{ github.event.inputs.DEVICE_PATH }}-kernel
 
     - name: Generate build info
       run: |
@@ -121,6 +140,28 @@ jobs:
         cat INFO.txt
       working-directory: device/${{ github.event.inputs.DEVICE_PATH }}
 
+    - name: Check build environment
+      run: |
+        echo "=== 检查构建环境 ==="
+        # 检查设备树是否存在
+        if [ ! -d "device/${{ github.event.inputs.DEVICE_PATH }}" ]; then
+          echo "错误：设备树未找到！"
+          exit 1
+        fi
+        
+        # 检查内核树是否存在
+        if [ ! -d "device/${{ github.event.inputs.DEVICE_PATH }}-kernel" ]; then
+          echo "错误：内核树未找到！"
+          exit 1
+        fi
+        
+        # 检查内核文件是否存在
+        if [ ! -f "device/${{ github.event.inputs.DEVICE_PATH }}-kernel/kernel" ]; then
+          echo "警告：内核文件不存在，可能导致构建失败！"
+        fi
+        
+        echo "构建环境检查通过！"
+
     - name: Build TWRP
       run: |
         source build/envsetup.sh
@@ -132,7 +173,8 @@ jobs:
         lunch twrp_${{ env.LUNCH_TARGET }}
         (while true; do echo `date +%T` "Building TWRP..."; free -h; sleep 10; done) &
         TIP_PID=$!
-        m ${{ github.event.inputs.BUILD_PARTITION }}image
+        # 使用CPU核心数的2倍线程进行构建，提高效率
+        m -j$(($(nproc) * 2)) ${{ github.event.inputs.BUILD_PARTITION }}image
         mv out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_PARTITION }}.img out/target/product/${{ github.event.inputs.DEVICE_NAME }}/TWRP-3.7.1-16-${{ github.event.inputs.DEVICE_NAME }}-${{ env.BUILD_DATE }}.img
         kill $TIP_PID && exit 0
 
